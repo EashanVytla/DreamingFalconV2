@@ -5,14 +5,11 @@ import os
 from tqdm import tqdm
 from utils import AttrDict
 import yaml
-import csv
+from torch.utils.tensorboard import SummaryWriter
 
 model_directory = "models/10-14-Synthetic"
 data_directory = "data/10-14-Synthetic/train"
 log_directory = "runs/10-14"
-
-def tensor_to_numpy(tensor):
-    return tensor.detach().cpu().numpy()
 
 def main():
     with open('config.yaml', 'r') as file:
@@ -22,11 +19,9 @@ def main():
 
     model = WorldModel(config)
 
-    model_path = os.path.join("models", "10-14-Synthetic", "model.pt")
-    model.load_state_dict(torch.load(model_path))
-
     pipeline = Pipeline(os.path.join(data_directory, "states.csv"), os.path.join(data_directory, "actions.csv"), os.path.join(data_directory, "rewards.csv"))
     dataloader = pipeline.read_csv(batch_size=config.training.batch_size)
+    optimizer = torch.optim.SGD(model.parameters(), lr=config.training.lr)
 
     if torch.cuda.is_available():
         device = torch.device("cuda")  # Use the GPU
@@ -35,23 +30,26 @@ def main():
         device = torch.device("cpu")  # Use the CPU
         print("Using CPU")
 
-    output_file = os.path.join("models", "10-14-Synthetic", "test.csv")
+    writer = SummaryWriter(log_directory)
 
-    with open(output_file, 'w', newline='') as csvfile:
-        csv_writer = csv.writer(csvfile)
+    for epoch in range(config.training.num_epochs):
+        for batch_count, (states, actions) in enumerate(tqdm(dataloader, desc=f"Epoch {epoch}")):
 
-        for batch_count, (states, actions) in enumerate(dataloader):
-            with torch.no_grad():
-                for param in model.model.parameters():
-                    param.requires_grad = True
+            for param in model.model.parameters():
+                param.requires_grad = True
 
-                pred = model.predict(states, actions)
+            pred = model.predict(states, actions)
 
-                pred_np = tensor_to_numpy(pred)
-                for row in pred_np:
-                    csv_writer.writerow(row)
+            loss = model.loss(pred[:-1], states[1:])
 
+            writer.add_scalar("Loss/train", loss, epoch)
 
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+    torch.save(model.state_dict(), os.path.join(model_directory, "model.pt"))
+    writer.close()
 
 if __name__ == "__main__":
     main()
