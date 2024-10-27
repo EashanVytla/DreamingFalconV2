@@ -1,6 +1,6 @@
 import torch
 from world_model import WorldModel
-from dataloader import Pipeline
+import pandas as pd
 import os
 from tqdm import tqdm
 from utils import AttrDict
@@ -25,9 +25,6 @@ def main():
     model_path = os.path.join("models", "10-14-Synthetic", "model.pt")
     model.load_state_dict(torch.load(model_path))
 
-    pipeline = Pipeline(os.path.join(data_directory, "states.csv"), os.path.join(data_directory, "actions.csv"), os.path.join(data_directory, "rewards.csv"))
-    dataloader = pipeline.read_csv(batch_size=config.training.batch_size)
-
     if torch.cuda.is_available():
         device = torch.device("cuda")  # Use the GPU
         print("Using GPU:", torch.cuda.get_device_name(0)) 
@@ -37,21 +34,22 @@ def main():
 
     output_file = os.path.join("models", "10-14-Synthetic", "test.csv")
 
+    states_df = pd.read_csv(os.path.join(data_directory, "states.csv"), header=None)
+    actions_df = pd.read_csv(os.path.join(data_directory, "actions.csv"), header=None)
+    states_df = states_df.transpose()
+    actions_df = actions_df.transpose()
+
     with open(output_file, 'w', newline='') as csvfile:
         csv_writer = csv.writer(csvfile)
 
-        for batch_count, (states, actions) in enumerate(dataloader):
-            with torch.no_grad():
-                for param in model.model.parameters():
-                    param.requires_grad = True
+        for (_, state_row), (_, action_row) in zip(states_df.iterrows(), actions_df.iterrows()):
+            # Convert row to tensor
+            state_tensor = torch.tensor(state_row.values, dtype=torch.float).reshape((1, 12))
+            action_tensor = torch.tensor(action_row.values, dtype=torch.float).reshape((1, 4))
+            
+            _, pred = model.predict(state_tensor, action_tensor)
 
-                pred = model.predict(states, actions)
-
-                pred_np = tensor_to_numpy(pred)
-                for row in pred_np:
-                    csv_writer.writerow(row)
-
-
+            csv_writer.writerow(tensor_to_numpy(pred.flatten()))
 
 if __name__ == "__main__":
     main()

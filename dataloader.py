@@ -15,15 +15,16 @@ class Pipeline:
         return self.dataloader
     
 class SequenceDataset(Dataset):
-    def __init__(self, states_file, actions_file):
+    def __init__(self, states_file, actions_file, seq_len=25):
         self.states = pd.read_csv(states_file, header=None)
         self.actions = pd.read_csv(actions_file, header=None)
+        self.seq_len = seq_len
         print(f"States: {self.states.shape}, Actions: {self.actions.shape}")
 
     def __len__(self):
-        return self.states.shape[1]
+        return self.states.shape[1] - self.seq_len + 1
 
     def __getitem__(self, idx):
-        states = torch.tensor(self.states.iloc[:, idx].values, dtype=torch.float32)
-        actions = torch.tensor(self.actions.iloc[:, idx].values, dtype=torch.float32)
+        states = torch.tensor(self.states.iloc[:, idx:idx+self.seq_len].values, dtype=torch.float32)
+        actions = torch.tensor(self.actions.iloc[:, idx:idx+self.seq_len].values, dtype=torch.float32)
         return states, actions

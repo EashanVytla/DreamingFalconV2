@@ -55,38 +55,24 @@ def main():
     # model.compute_normalization_stats(dataloader)
 
     for epoch in range(config.training.num_epochs):
-        print(f"\nEpoch {epoch} parameter norms:")
-        for name, param in model.named_parameters():
-            print(f"{name}: {param.data.norm().item():.6f}")
+        # print(f"\nEpoch {epoch} parameter norms:")
+        # for name, param in model.named_parameters():
+        #     print(f"{name}: {param.data.norm().item():.6f}")
 
         for batch_count, (states, actions) in enumerate(tqdm(dataloader, desc=f"Epoch {epoch}")):
             optimizer.zero_grad()
 
-            pred = model.predict(states, actions)
+            pred_traj = model.rollout(states[:,:,0], actions, 25)
 
-            loss = model.loss(pred[:-1], states[1:])
+            loss = model.loss(pred_traj, states)
+
 
             loss.backward()
-
-            # if batch_count % 100 == 0:  # Print every 100 batches
-            #     print("\nGradient and Parameter Norms:")
-            #     print("-" * 70)
-            #     print_gradient_norms(model)
-            #     print("-" * 70)
-            
             optimizer.step()
 
         # Track total gradient norm
         grad_norm = compute_gradient_norm(model)
         writer.add_scalar("Gradients/total_norm", grad_norm, epoch)
-        
-        # Track gradients per layer
-        # for name, param in model.named_parameters():
-        #     if param.grad is not None:
-        #         writer.add_histogram(f'Gradients/{name}', param.grad)
-        #         writer.add_scalar(f'Gradients/norm/{name}', 
-        #                         param.grad.norm().item(), 
-        #                         epoch)
     
         writer.add_scalar("Loss/train", loss, epoch)
         #scheduler.step(loss.item())

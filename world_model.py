@@ -57,13 +57,19 @@ class WorldModel(nn.Module):
         self.actions_mean = all_actions.mean(dim=0)
         self.actions_std = all_actions.std(dim=0) + 1e-6
 
+    def rollout(self, x_t, act_inps, seq_len):
+        x_roll = [x_t]
+        for i in range(1, seq_len):
+            x_roll.append(self.predict(x_roll[i-1], act_inps[i]))
+
+        x_traj = torch.stack(x_roll, dim=1)
+
     def predict(self, x_t, actuator_input):
         # Run feedforward on MLP
         # Actuator Input: (4, batch_size)
         # x_t: (12, batch_size)
         # Output: (6, batch_size)
         attitude, velo, ang_velo, pose = x_t[:, :3], x_t[:, 3:6], x_t[:, 6:9], x_t[:, 9:12]
-
 
         norm_x_t = torch.zeros_like(x_t, dtype=torch.float32)
         norm_x_t[:, :3] = x_t[:, :3] / (2*math.pi)
@@ -78,10 +84,12 @@ class WorldModel(nn.Module):
         # print(f"Norm_x:\n{norm_x_t}")
         # print(f"Norm_act:\n{norm_act}")
 
-        # print(f"X_dim: {norm_x_t.shape}, Act: {norm_act.shape}")
+        print(f"X_dim: {norm_x_t.shape}, Act: {norm_act.shape}")
         inp = torch.cat((norm_x_t, norm_act), dim=1)
         output = self.model(inp)
         force, ang_acel = output[:, :3], output[:, 3:]
+
+        print(f"Force: {force}\nAng Acel: {ang_acel}")
 
         '''
         State:
@@ -104,11 +112,7 @@ class WorldModel(nn.Module):
 
         rot = euler_angles_to_matrix(attitude_t1, "XYZ")
 
-        # print(f"Force Shape: {force.shape}, Rot Shape: {rot.shape}")
-
         rot_force = torch.bmm(force.unsqueeze(1), rot).squeeze(1)
-
-        # print(f"Rotated Force: {rot_force.shape}, Velo Shape: {velo.shape}")
 
         a = (1/self._mass) * (rot_force - torch.tensor([0, 0, self._g], dtype=torch.float32, device=x_t.device) - self._k * torch.tensor([1, 0, 0], dtype=torch.float32, device=x_t.device) * torch.square(velo))
         velo_t1 = velo + a * self._rate
@@ -129,4 +133,5 @@ class WorldModel(nn.Module):
         weights[:, 9:12] *= 0.1  # position weights
         
         # Weighted MSE loss
-        return torch.mean(weights * (pred - truth) ** 2)
+        # return torch.mean(weights * (pred - truth) ** 2)
+        return torch.mean((pred - truth) ** 2)

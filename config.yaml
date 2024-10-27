@@ -1,5 +1,5 @@
 physics: 
-  refresh_rate: 0.02 # This is in ms 1/rate = hz
+  refresh_rate: 0.5 # This is in ms 1/rate = hz
   mass: 10 # kg
   g: 9.81 # Gravity Constant
   k: 0.25 # Drag Coefficient
