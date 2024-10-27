@@ -5,12 +5,13 @@ from torch.utils.data import Dataset
 import os
 
 class Pipeline:
-    def __init__(self, csv_path_states, csv_path_actions, csv_path_rewards):
+    def __init__(self, csv_path_states, csv_path_actions, seq_len=25):
         self.csv_path_states = csv_path_states
         self.csv_path_actions = csv_path_actions
+        self.seq_len = seq_len
 
     def read_csv(self, batch_size=500):
-        self.dataloader = DataLoader(SequenceDataset(self.csv_path_states, self.csv_path_actions), num_workers=os.cpu_count(), batch_size=batch_size, shuffle=True, pin_memory=True)
+        self.dataloader = DataLoader(SequenceDataset(self.csv_path_states, self.csv_path_actions, seq_len=self.seq_len), num_workers=os.cpu_count(), batch_size=batch_size, shuffle=True, pin_memory=True)
 
         return self.dataloader
     

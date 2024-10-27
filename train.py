@@ -35,13 +35,13 @@ def main():
 
     model = WorldModel(config)
 
-    pipeline = Pipeline(os.path.join(data_directory, "states.csv"), os.path.join(data_directory, "actions.csv"), os.path.join(data_directory, "rewards.csv"))
+    pipeline = Pipeline(os.path.join(data_directory, "states.csv"), os.path.join(data_directory, "actions.csv"), seq_len=config.training.seq_len)
     dataloader = pipeline.read_csv(batch_size=config.training.batch_size)
-    optimizer = torch.optim.SGD(model.parameters(), lr=config.training.lr)
-    #optimizer = torch.optim.Adam(model.parameters(), lr=config.training.lr)
-    #scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-    #    optimizer, mode='min', factor=0.5, patience=5, verbose=True
-    #)
+    #optimizer = torch.optim.SGD(model.parameters(), lr=config.training.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=config.training.lr)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+       optimizer, mode='min', factor=0.5, patience=5, verbose=True
+    )
 
     if torch.cuda.is_available():
         device = torch.device("cuda")  # Use the GPU
@@ -62,10 +62,13 @@ def main():
         for batch_count, (states, actions) in enumerate(tqdm(dataloader, desc=f"Epoch {epoch}")):
             optimizer.zero_grad()
 
-            pred_traj = model.rollout(states[:,:,0], actions, 25)
+            pred_traj = model.rollout(states[:,:,0], actions, config.training.seq_len)
+
+            # print(f"Pred_traj Shape: {pred_traj}")
 
             loss = model.loss(pred_traj, states)
 
+            # print(f"Loss: {loss}")
 
             loss.backward()
             optimizer.step()
@@ -75,7 +78,7 @@ def main():
         writer.add_scalar("Gradients/total_norm", grad_norm, epoch)
     
         writer.add_scalar("Loss/train", loss, epoch)
-        #scheduler.step(loss.item())
+        scheduler.step(loss.item())
 
     torch.save(model.state_dict(), os.path.join(model_directory, "model.pt"))
     writer.close()

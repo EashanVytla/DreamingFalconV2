@@ -36,20 +36,23 @@ def main():
 
     states_df = pd.read_csv(os.path.join(data_directory, "states.csv"), header=None)
     actions_df = pd.read_csv(os.path.join(data_directory, "actions.csv"), header=None)
-    states_df = states_df.transpose()
-    actions_df = actions_df.transpose()
 
     with open(output_file, 'w', newline='') as csvfile:
         csv_writer = csv.writer(csvfile)
 
-        for (_, state_row), (_, action_row) in zip(states_df.iterrows(), actions_df.iterrows()):
-            # Convert row to tensor
-            state_tensor = torch.tensor(state_row.values, dtype=torch.float).reshape((1, 12))
-            action_tensor = torch.tensor(action_row.values, dtype=torch.float).reshape((1, 4))
-            
-            _, pred = model.predict(state_tensor, action_tensor)
+        # Convert row to tensor
+        state_tensor = torch.tensor(states_df.iloc[:, 0].values, dtype=torch.float).unsqueeze(0)
+        action_tensor = torch.tensor(actions_df.values, dtype=torch.float).unsqueeze(0)
 
-            csv_writer.writerow(tensor_to_numpy(pred.flatten()))
+        print(state_tensor.shape)
+        print(action_tensor.shape)
+        
+        traj = model.rollout(state_tensor, action_tensor, 800)
+
+        data = tensor_to_numpy(traj.squeeze(0)).T
+
+        for row in data:
+            csv_writer.writerow(row)
 
 if __name__ == "__main__":
     main()
