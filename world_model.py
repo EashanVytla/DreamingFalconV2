@@ -14,6 +14,7 @@ class MLP(nn.Module):
         hidden_dims = [input_dim] + hidden_dims
         for i in range(1, len(hidden_dims)):
             layers.append(nn.Linear(hidden_dims[i-1], hidden_dims[i]))
+            layers.append(nn.LayerNorm(hidden_dims[i]))
             layers.append(nn.ReLU())
 
         layers.append(nn.Linear(hidden_dims[-1], output_dim))
@@ -35,6 +36,26 @@ class WorldModel(nn.Module):
         self._k = config.physics.k
 
         self.model = MLP(config.force_model.input_dim, hidden_dims, config.force_model.output_dim)
+    
+    def compute_normalization_stats(self, dataloader):
+        """Compute means and stds from the dataset"""
+        # Collect all states
+        states_list = []
+        actions_list = []
+        
+        for states, actions in dataloader:
+            states_list.append(states)
+            actions_list.append(actions)
+        
+        all_states = torch.cat(states_list, dim=0)
+        all_actions = torch.cat(actions_list, dim=0)
+        
+        # Compute means and stds
+        self.states_mean = all_states.mean(dim=0)
+        self.states_std = all_states.std(dim=0) + 1e-6  # add epsilon to avoid division by zero
+        
+        self.actions_mean = all_actions.mean(dim=0)
+        self.actions_std = all_actions.std(dim=0) + 1e-6
 
     def predict(self, x_t, actuator_input):
         # Run feedforward on MLP
@@ -48,8 +69,14 @@ class WorldModel(nn.Module):
         norm_x_t[:, :3] = x_t[:, :3] / (2*math.pi)
         norm_x_t[:, 3:6] = x_t[:, 3:6] / 20
         norm_x_t[:, 6:9] = x_t[:, 6:9] / (2*math.pi)
-        norm_x_t[:, 9:12] = x_t[:, 9:12] / 1000
+        norm_x_t[:, 9:12] = x_t[:, 9:12] / 10
         norm_act = (actuator_input - 1000)/1000
+
+        # norm_x_t = (x_t - self.states_mean) / self.states_std
+        # norm_act = (actuator_input - self.actions_mean) / self.actions_std
+
+        # print(f"Norm_x:\n{norm_x_t}")
+        # print(f"Norm_act:\n{norm_act}")
 
         # print(f"X_dim: {norm_x_t.shape}, Act: {norm_act.shape}")
         inp = torch.cat((norm_x_t, norm_act), dim=1)
@@ -75,8 +102,7 @@ class WorldModel(nn.Module):
         ang_vel_t1 = ang_acel * self._rate + ang_velo
         attitude_t1 = attitude + ang_velo * self._rate + 0.5 * ang_acel * self._rate ** 2
 
-        with torch.no_grad():
-            rot = euler_angles_to_matrix(attitude_t1, "XYZ")
+        rot = euler_angles_to_matrix(attitude_t1, "XYZ")
 
         # print(f"Force Shape: {force.shape}, Rot Shape: {rot.shape}")
 
@@ -96,6 +122,11 @@ class WorldModel(nn.Module):
         #Compute the loss (Quaternion loss)
         #return utils.euclidean_distance(utils.euler_to_vector(pred), utils.euler_to_vector(truth))
 
-        #MSE:
-        criterion = torch.nn.MSELoss()
-        return criterion(pred, truth)
+        weights = torch.ones_like(pred)
+        weights[:, :3] *= 1.0  # attitude weights
+        weights[:, 3:6] *= 0.1  # velocity weights
+        weights[:, 6:9] *= 1.0  # angular velocity weights
+        weights[:, 9:12] *= 0.1  # position weights
+        
+        # Weighted MSE loss
+        return torch.mean(weights * (pred - truth) ** 2)
