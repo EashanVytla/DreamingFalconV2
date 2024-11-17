@@ -14,5 +14,5 @@ force_model:
 training: 
   num_epochs: 50
   batch_size: 256
-  lr: 0.05
-  seq_len: 200
+  lr: 0.01
+  seq_len: 256

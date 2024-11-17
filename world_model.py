@@ -16,6 +16,7 @@ class MLP(nn.Module):
             layers.append(nn.Linear(hidden_dims[i-1], hidden_dims[i]))
             layers.append(nn.LayerNorm(hidden_dims[i]))
             layers.append(nn.ReLU())
+            layers.append(nn.Dropout(p=0.1))
 
         layers.append(nn.Linear(hidden_dims[-1], output_dim))
         
@@ -25,7 +26,7 @@ class MLP(nn.Module):
         return self.network(x)
 
 class WorldModel(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, device):
         super(WorldModel, self).__init__()
         # initialize the MLP
         hidden_dims = [config.force_model.hidden_size] * config.force_model.hidden_layers
@@ -36,6 +37,7 @@ class WorldModel(nn.Module):
         self._k = config.physics.k
 
         self.model = MLP(config.force_model.input_dim, hidden_dims, config.force_model.output_dim)
+        self.device = device
     
     def compute_normalization_stats(self, dataloader):
         """Compute means and stds from the dataset"""
@@ -63,7 +65,8 @@ class WorldModel(nn.Module):
             x_roll.append(self.predict(x_roll[i-1], act_inps[:, :, i]))
             # print(f"X Roll: {x_roll[i]}")
 
-        return torch.stack(x_roll, dim=2)
+        stacked = torch.stack(x_roll, dim=2)
+        return stacked
 
     def predict(self, x_t, actuator_input):
         # Run feedforward on MLP
@@ -72,7 +75,7 @@ class WorldModel(nn.Module):
         # Output: (6, batch_size)
         attitude, velo, ang_velo, pose = x_t[:, :3], x_t[:, 3:6], x_t[:, 6:9], x_t[:, 9:12]
 
-        norm_x_t = torch.zeros_like(x_t, dtype=torch.float32)
+        norm_x_t = torch.zeros_like(x_t, dtype=torch.float32, device=self.device)
         norm_x_t[:, :3] = x_t[:, :3] / (2*math.pi)
         norm_x_t[:, 3:6] = x_t[:, 3:6] / 20
         norm_x_t[:, 6:9] = x_t[:, 6:9] / (2*math.pi)
@@ -109,30 +112,31 @@ class WorldModel(nn.Module):
         '''
 
         ang_vel_t1 = ang_acel * self._rate + ang_velo
-        attitude_t1 = attitude + ang_velo * self._rate + 0.5 * ang_acel * self._rate ** 2
+        raw_attitude_t1 = attitude + ang_velo * self._rate + 0.5 * ang_acel * self._rate ** 2
+
+        attitude_t1 = utils.unwrap(raw_attitude_t1)
 
         rot = euler_angles_to_matrix(attitude_t1, "XYZ")
 
         rot_force = torch.bmm(force.unsqueeze(1), rot).squeeze(1)
 
-        a = (1/self._mass) * (rot_force - torch.tensor([0, 0, self._g], dtype=torch.float32, device=x_t.device) - self._k * torch.tensor([1, 0, 0], dtype=torch.float32, device=x_t.device) * torch.square(velo))
+        a = (1/self._mass) * (rot_force - torch.tensor([0, 0, self._g], dtype=torch.float32, device=self.device) - self._k * torch.tensor([1, 0, 0], dtype=torch.float32, device=self.device) * torch.square(velo))
         velo_t1 = velo + a * self._rate
         pose_t1 = pose + velo * self._rate + 0.5 * a * self._rate ** 2
 
         x_t1 = torch.cat([attitude_t1, velo_t1, ang_vel_t1, pose_t1], dim=1)
 
         return x_t1
-
+    
     def loss(self, pred, truth):
         #Compute the loss (Quaternion loss)
         #return utils.euclidean_distance(utils.euler_to_vector(pred), utils.euler_to_vector(truth))
 
-        # weights = torch.ones_like(pred)
-        # weights[:, :3] *= 1.0  # attitude weights
-        # weights[:, 3:6] *= 0.1  # velocity weights
-        # weights[:, 6:9] *= 1.0  # angular velocity weights
-        # weights[:, 9:12] *= 0.1  # position weights
+        weights = torch.ones_like(pred, device=self.device)
+        weights[:, :3] *= 10.0  # attitude weights
+        weights[:, 3:6] *= 1.0  # velocity weights
+        weights[:, 6:9] *= 10.0  # angular velocity weights
+        weights[:, 9:12] *= 1.0  # position weights
         
         # Weighted MSE loss
-        # return torch.mean(weights * (pred - truth) ** 2)
-        return torch.mean((pred - truth) ** 2)
+        return torch.mean(weights * (pred - truth) ** 2)

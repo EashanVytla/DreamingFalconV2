@@ -1,5 +1,6 @@
 import torch 
 from pytorch3d.transforms.rotation_conversions import euler_angles_to_matrix
+import math
 
 def euler_to_vector(euler_angles: torch.Tensor, device="cuda") -> torch.Tensor:
     vector = torch.tensor([1, 0, 0], dtype=torch.float32, device=device)
@@ -11,6 +12,10 @@ def euler_to_vector(euler_angles: torch.Tensor, device="cuda") -> torch.Tensor:
     # rotated_vector = rotated_vector / torch.norm(rotated_vector)
 
     return rotated_vector
+
+def unwrap(x):
+    y = x % (2 * math.pi)
+    return torch.where(y > math.pi, 2*math.pi - y, y)
 
 def euclidean_distance(p, q):
     return torch.norm(p - q)

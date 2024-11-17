@@ -7,9 +7,9 @@ from utils import AttrDict
 import yaml
 from torch.utils.tensorboard import SummaryWriter
 
-model_directory = "models/10-14-Synthetic"
-data_directory = "data/10-14-Synthetic/train"
-log_directory = "runs/10-14"
+model_directory = "models/11-17-Synthetic"
+data_directory = "data/11-17-Synthetic/train"
+log_directory = "runs/11-17"
 
 def compute_gradient_norm(model):
     total_norm = 0
@@ -33,22 +33,22 @@ def main():
 
     config = AttrDict.from_dict(config_dict)
 
-    model = WorldModel(config)
-
-    pipeline = Pipeline(os.path.join(data_directory, "states.csv"), os.path.join(data_directory, "actions.csv"), seq_len=config.training.seq_len)
-    dataloader = pipeline.read_csv(batch_size=config.training.batch_size)
-    #optimizer = torch.optim.SGD(model.parameters(), lr=config.training.lr)
-    optimizer = torch.optim.Adam(model.parameters(), lr=config.training.lr)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-       optimizer, mode='min', factor=0.5, patience=5, verbose=True
-    )
-
     if torch.cuda.is_available():
         device = torch.device("cuda")  # Use the GPU
         print("Using GPU:", torch.cuda.get_device_name(0)) 
     else:
         device = torch.device("cpu")  # Use the CPU
         print("Using CPU")
+
+    model = WorldModel(config, device).to(device)
+
+    pipeline = Pipeline(os.path.join(data_directory, "states.csv"), os.path.join(data_directory, "actions.csv"), seq_len=config.training.seq_len)
+    dataloader = pipeline.read_csv(batch_size=config.training.batch_size)
+    #optimizer = torch.optim.SGD(model.parameters(), lr=config.training.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=config.training.lr, weight_decay=0.01)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+       optimizer, mode='min', factor=0.8, patience=5, verbose=True
+    )
 
     writer = SummaryWriter(log_directory)
 
@@ -60,17 +60,18 @@ def main():
         #     print(f"{name}: {param.data.norm().item():.6f}")
 
         for batch_count, (states, actions) in enumerate(tqdm(dataloader, desc=f"Epoch {epoch}")):
+            states = states.to(device)
+            actions = actions.to(device)
             optimizer.zero_grad()
 
             pred_traj = model.rollout(states[:,:,0], actions, config.training.seq_len)
-
-            # print(f"Pred_traj Shape: {pred_traj}")
 
             loss = model.loss(pred_traj, states)
 
             # print(f"Loss: {loss}")
 
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
         # Track total gradient norm
