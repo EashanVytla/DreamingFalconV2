@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import utils
-from pytorch3d.transforms.rotation_conversions import euler_angles_to_matrix
 import math
 
 class MLP(nn.Module):
@@ -40,8 +39,6 @@ class WorldModel(nn.Module):
         self.device = device
     
     def compute_normalization_stats(self, dataloader):
-        """Compute means and stds from the dataset"""
-        # Collect all states
         states_list = []
         actions_list = []
         
@@ -52,9 +49,8 @@ class WorldModel(nn.Module):
         all_states = torch.cat(states_list, dim=0)
         all_actions = torch.cat(actions_list, dim=0)
         
-        # Compute means and stds
         self.states_mean = all_states.mean(dim=0)
-        self.states_std = all_states.std(dim=0) + 1e-6  # add epsilon to avoid division by zero
+        self.states_std = all_states.std(dim=0) + 1e-6
         
         self.actions_mean = all_actions.mean(dim=0)
         self.actions_std = all_actions.std(dim=0) + 1e-6
@@ -73,7 +69,7 @@ class WorldModel(nn.Module):
         # Actuator Input: (4, batch_size)
         # x_t: (12, batch_size)
         # Output: (6, batch_size)
-        attitude, velo, ang_velo, pose = x_t[:, :3], x_t[:, 3:6], x_t[:, 6:9], x_t[:, 9:12]
+        attitude, velo = x_t[:, :3], x_t[:, 3:6]
 
         norm_x_t = torch.zeros_like(x_t, dtype=torch.float32, device=self.device)
         norm_x_t[:, :3] = x_t[:, :3] / (2*math.pi)
@@ -82,55 +78,42 @@ class WorldModel(nn.Module):
         norm_x_t[:, 9:12] = x_t[:, 9:12] / 10
         norm_act = (actuator_input - 1000)/1000
 
-        # norm_x_t = (x_t - self.states_mean) / self.states_std
-        # norm_act = (actuator_input - self.actions_mean) / self.actions_std
-
-        # print(f"Norm_x:\n{norm_x_t}")
-        # print(f"Norm_act:\n{norm_act}")
-
-        # print(f"X_dim: {norm_x_t.shape}, Act: {norm_act.shape}")
         inp = torch.cat((norm_x_t, norm_act), dim=1)
         output = self.model(inp)
-        force, ang_acel = output[:, :3], output[:, 3:]
+        
+        wrapped_theta_dot = torch.atan2(torch.sin(output[:, 0:3]), torch.cos(output[:, 0:3]))
+        wrapped_w_dot = torch.clamp(output[:, 3:6], -math.pi/2, math.pi/2)
 
-        # print(f"Force: {force}\nAng Acel: {ang_acel}")
+        theta_x_dot = wrapped_theta_dot[:, 0]
+        theta_y_dot = wrapped_theta_dot[:, 1]
+        theta_z_dot = wrapped_theta_dot[:, 2]
+        w_x_dot = wrapped_w_dot[:, 0]
+        w_y_dot = wrapped_w_dot[:, 1]
+        w_z_dot = wrapped_w_dot[:, 2]
+        p_x_dot = output[:, 6]
+        p_y_dot = output[:, 7]
+        p_z_dot = output[:, 8]
 
-        '''
-        State:
-        1)  theta_x (pitch)
-        2)  theta_y (roll)
-        3)  theta_z (yaw)
-        4)  v_x
-        5)  v_y
-        6)  v_z
-        7)  w_x (pitch)
-        8)  w_y (roll)
-        9)  w_z (yaw)
-        10) p_x
-        11) p_y
-        12) p_z
-        '''
+        print(f"Theta dot: {wrapped_theta_dot[0,:]}")
 
-        ang_vel_t1 = ang_acel * self._rate + ang_velo
-        raw_attitude_t1 = attitude + ang_velo * self._rate + 0.5 * ang_acel * self._rate ** 2
+        eps = 1e-6
+        
+        theta_x_t1 = attitude[:, 0] + (theta_x_dot + torch.sin(attitude[:, 0]) * torch.tan(attitude[:, 0]) * theta_y_dot + torch.cos(attitude[:, 0]) * torch.tan(attitude[:, 1]) * theta_z_dot) * self._rate
+        theta_y_t1 = attitude[:, 1] + (theta_y_dot * torch.cos(attitude[:, 0]) - torch.sin(attitude[:, 0])) * self._rate
+        theta_z_t1 = attitude[:, 2] + ((torch.sin(attitude[:, 0])/torch.cos(attitude[:, 1] + eps)) + torch.cos(attitude[:, 0])/torch.cos(attitude[:, 1] + eps) * theta_z_dot) * self._rate
+        velo_x_t1 = velo[:, 0] + (w_x_dot - (theta_y_dot * p_z_dot - theta_z_dot * p_y_dot) + self._g * torch.sin(attitude[:, 1])) * self._rate
+        velo_y_t1 = velo[:, 1] + (w_y_dot - (theta_z_dot * p_x_dot - theta_x_dot * p_z_dot) - self._g * torch.cos(attitude[:, 1]) * torch.sin(attitude[:, 0])) * self._rate
+        velo_z_t1 = velo[:, 2] + (w_z_dot - (theta_x_dot * p_y_dot - theta_y_dot * p_x_dot) - self._g * torch.cos(attitude[:, 1]) * torch.sin(attitude[:, 0]) + self._g) * self._rate
+        wp_t1 = x_t[:, 6:12] + output[:, 3:9] * self._rate
 
-        attitude_t1 = utils.unwrap(raw_attitude_t1)
-
-        rot = euler_angles_to_matrix(attitude_t1, "XYZ")
-
-        rot_force = torch.bmm(force.unsqueeze(1), rot).squeeze(1)
-
-        a = (1/self._mass) * (rot_force - torch.tensor([0, 0, self._g], dtype=torch.float32, device=self.device) - self._k * torch.tensor([1, 0, 0], dtype=torch.float32, device=self.device) * torch.square(velo))
-        velo_t1 = velo + a * self._rate
-        pose_t1 = pose + velo * self._rate + 0.5 * a * self._rate ** 2
-
-        x_t1 = torch.cat([attitude_t1, velo_t1, ang_vel_t1, pose_t1], dim=1)
+        x_t1 = torch.cat([theta_x_t1.unsqueeze(1), theta_y_t1.unsqueeze(1), theta_z_t1.unsqueeze(1), velo_x_t1.unsqueeze(1), velo_y_t1.unsqueeze(1), velo_z_t1.unsqueeze(1), wp_t1], dim=1)
 
         return x_t1
     
     def loss(self, pred, truth):
-        #Compute the loss (Quaternion loss)
-        #return utils.euclidean_distance(utils.euler_to_vector(pred), utils.euler_to_vector(truth))
+        angle_diff = torch.remainder(pred[:, :3] - truth[:, :3] + math.pi, 2*math.pi) - math.pi
+        other_diff = pred[:, 3:] - truth[:, 3:]
+        diff = torch.cat([angle_diff, other_diff], dim=1)
 
         weights = torch.ones_like(pred, device=self.device)
         weights[:, :3] *= 10.0  # attitude weights
@@ -139,4 +122,4 @@ class WorldModel(nn.Module):
         weights[:, 9:12] *= 1.0  # position weights
         
         # Weighted MSE loss
-        return torch.mean(weights * (pred - truth) ** 2)
+        return torch.mean(weights * torch.square(diff))

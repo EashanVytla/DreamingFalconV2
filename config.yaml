@@ -6,13 +6,13 @@ physics:
 
 force_model:
   input_dim: 16
-  hidden_layers: 2
-  hidden_size: 32
-  output_dim: 6
+  hidden_layers: 3
+  hidden_size: 128
+  output_dim: 9
   state_dim: 12
 
 training: 
   num_epochs: 50
   batch_size: 256
   lr: 0.01
-  seq_len: 256
+  seq_len: 2

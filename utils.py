@@ -1,17 +1,16 @@
 import torch 
-from pytorch3d.transforms.rotation_conversions import euler_angles_to_matrix
 import math
 
-def euler_to_vector(euler_angles: torch.Tensor, device="cuda") -> torch.Tensor:
-    vector = torch.tensor([1, 0, 0], dtype=torch.float32, device=device)
-    rot = euler_angles_to_matrix(euler_angles, "XYZ")
+# def euler_to_vector(euler_angles: torch.Tensor, device="cuda") -> torch.Tensor:
+#     vector = torch.tensor([1, 0, 0], dtype=torch.float32, device=device)
+#     rot = euler_angles_to_matrix(euler_angles, "XYZ")
 
-    print("Rotation matrix for the given Euler angles:\n", rot)
+#     print("Rotation matrix for the given Euler angles:\n", rot)
 
-    rotated_vector = torch.matmul(rot, vector)
-    # rotated_vector = rotated_vector / torch.norm(rotated_vector)
+#     rotated_vector = torch.matmul(rot, vector)
+#     # rotated_vector = rotated_vector / torch.norm(rotated_vector)
 
-    return rotated_vector
+#     return rotated_vector
 
 def unwrap(x):
     y = x % (2 * math.pi)
