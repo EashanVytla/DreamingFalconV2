@@ -2,6 +2,7 @@ import unittest
 import utils
 import torch
 import math
+from rk4_solver import RK4_Solver
 
 class TestUtilsMethods(unittest.TestCase):
     def test_euler_to_vector(self):

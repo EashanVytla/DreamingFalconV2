@@ -20,7 +20,7 @@ class SequenceDataset(Dataset):
         self.states = pd.read_csv(states_file, header=None)
         self.actions = pd.read_csv(actions_file, header=None)
         self.seq_len = seq_len
-        print(f"States: {self.states.shape}, Actions: {self.actions.shape}")
+        # print(f"States: {self.states.shape}, Actions: {self.actions.shape}")
 
     def __len__(self):
         return self.states.shape[1] - self.seq_len + 1

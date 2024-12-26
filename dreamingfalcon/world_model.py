@@ -1,0 +1,199 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import dreamingfalcon.utils
+import math
+from dreamingfalcon.rk4_solver import RK4_Solver
+import torch.nn.functional as F
+
+class MLP(nn.Module):
+    def __init__(self, input_dim, hidden_dims, output_dim):
+        super(MLP, self).__init__()
+        
+        layers = []
+        
+        hidden_dims = [input_dim] + hidden_dims
+        for i in range(1, len(hidden_dims)):
+            layers.append(nn.Linear(hidden_dims[i-1], hidden_dims[i]))
+            # layers.append(nn.LayerNorm(hidden_dims[i]))
+            layers.append(nn.LeakyReLU())
+            layers.append(nn.Dropout(p=0.1))
+
+        layers.append(nn.Linear(hidden_dims[-1], output_dim))
+        
+        self.network = nn.Sequential(*layers)
+    
+    def forward(self, x):
+        return self.network(x)
+
+class WorldModel(nn.Module):
+    def __init__(self, config, device):
+        super(WorldModel, self).__init__()
+        # initialize the MLP
+        hidden_dims = [config.force_model.hidden_size] * config.force_model.hidden_layers
+
+        self._rate = config.physics.refresh_rate
+        self._mass = config.physics.mass
+        self._g = config.physics.g
+        self._I_yy = config.physics.I_yy
+        self._loss_scaler = config.training.loss_scaler
+        self.epsilon = 1e-6
+        self._beta = config.training.beta
+
+        self.model = MLP(config.force_model.input_dim, hidden_dims, config.force_model.output_dim)
+        self.model.apply(self.init_weights)
+        self.device = device
+
+        self.solver = RK4_Solver(dt=self._rate)
+
+    def init_weights(self, layer):
+        if isinstance(layer, nn.Linear):
+            # Example 1: Xavier Initialization (Good for Tanh/Sigmoid)
+            nn.init.xavier_uniform_(layer.weight)
+            if layer.bias is not None:
+                nn.init.zeros_(layer.bias)
+    
+    def compute_normalization_stats(self, dataloader):
+        states_list = []
+        actions_list = []
+        
+        for states, actions in dataloader:
+            states_list.append(states)
+            actions_list.append(actions)
+        
+        all_states = torch.cat(states_list, dim=0)
+        all_actions = torch.cat(actions_list, dim=0)
+        
+        self.states_mean = all_states.mean(dim=0)
+        self.states_std = all_states.std(dim=0) + self.epsilon
+        
+        self.actions_mean = all_actions.mean(dim=0)
+        self.actions_std = all_actions.std(dim=0) + self.epsilon
+
+        self.states_mean = self.states_mean.to(device=self.device)
+        self.states_std = self.states_std.to(device=self.device)
+        self.actions_mean = self.actions_mean.to(device=self.device)
+        self.actions_std = self.actions_std.to(device=self.device)
+
+        print(f"Data statistics: ")
+        print(f"States mean: {self.states_mean}")
+        print(f"States std: {self.states_std}")
+        print(f"Actions mean: {self.actions_mean}")
+        print(f"Actions mean: {self.actions_std}")
+
+    def rollout(self, x_t, act_inps, seq_len):
+        x_roll = [x_t]
+        forces_roll = []
+        prev_x = None
+        for i in range(1, seq_len):
+            forces, pred = self.predict(x_roll[i-1], act_inps[:, :, i])
+            if torch.max(pred).item() > 1000 or torch.min(pred).item() < -1000:
+                print(f"Warning: Large values detected at step {i}: {torch.max(pred)}")
+
+            if prev_x is not None:
+                delta = torch.abs(pred - prev_x).max().item()
+                if delta > 1000:
+                    print(f"Warning: Large state change detected at step {i}, delta: {delta}")
+            prev_x = pred
+            x_roll.append(pred)
+            forces_roll.append(forces)
+
+        stacked = torch.stack(x_roll, dim=2)
+        stackedForces = torch.stack(forces_roll, dim=2)
+        return stackedForces, stacked
+
+    def _compute_derivatives(self, x, forces):
+        """
+        Compute state derivatives for RK4 integration
+        State vector: [gamma, alpha, q, V, Xe, Ze]
+        
+        Args:
+            x: Current state vector
+            forces: [Fx, Fz, Mr] forces and moment
+        """
+        # Extract states
+        gamma = x[:, 0]  # Flight path angle
+        alpha = x[:, 1]  # Angle of attack
+        q = x[:, 2]      # Pitch rate
+        V = x[:, 3]      # Velocity magnitude
+        # Note: Xe, Ze are positions, don't need them for derivatives
+        # print(torch.max(V))
+        
+        # Extract forces
+        Fx = forces[:, 0]
+        Fz = forces[:, 1]
+        Mr = forces[:, 2]
+        
+        # Initialize derivative vector
+        dx = torch.zeros_like(x, device=self.device)
+        
+        # Compute derivatives using equations of motion
+        # Velocity derivatives
+        dx[:, 3] = Fx/self._mass - self._g * torch.sin(gamma)  # V_dot
+        
+        # Position derivatives
+        dx[:, 4] = V * torch.cos(gamma)   # Xe_dot
+        dx[:, 5] = -V * torch.sin(gamma)  # Ze_dot
+        
+        # Angular derivatives
+        alpha_dot = Fz/(self._mass * V + self.epsilon) + (self._g/(V + self.epsilon)) * torch.cos(gamma) + q
+        dx[:, 1] = alpha_dot              # alpha_dot
+        dx[:, 0] = q - alpha_dot          # gamma_dot
+        dx[:, 2] = Mr/self._I_yy         # q_dot
+        
+        return dx
+    
+    def three_dof(self, x_t, forces):
+        # Use RK4 to integrate the system
+        return self.solver.step(x_t, self._compute_derivatives, forces)
+
+    def predict(self, x_t, actuator_input):
+        """
+        Predict next state using forces from MLP and RK4 integration
+        State vector: [gamma, alpha, q, V, Xe, Ze]
+        """
+        # Normalize states for neural network input
+        norm_x_t = torch.zeros_like(x_t, dtype=torch.float32, device=self.device)
+        norm_x_t[:, 0] = x_t[:, 0] / (math.pi/4)    # Flight path angle: ±45 degrees
+        norm_x_t[:, 1] = x_t[:, 1] / 2.0     # Angle of attack: ±45 degrees
+        norm_x_t[:, 2] = x_t[:, 2] / (math.pi/4)     # Pitch rate: ±45 deg/s
+        norm_x_t[:, 3] = x_t[:, 3] / 10       # Velocity: ±10 m/s
+        norm_x_t[:, 4:6] = x_t[:, 4:6] / 60          # Positions: ±100m range
+
+        # print(f"x_t shape: {x_t.shape}, states shape: {self.states_mean.shape}")
+
+        # norm_x_t = (x_t - self.states_mean.T)/self.states_std.T
+        # norm_act = (actuator_input - self.actions_mean.T)/self.actions_std.T
+
+        # Normalize actuator inputs
+        norm_act = (actuator_input - 1500) / 500       # Actuator inputs: 1000-2000 range
+        
+        # Get forces from MLP
+        inp = torch.cat((norm_x_t, norm_act), dim=1)
+        forces_norm = self.model(inp)
+        # print(torch.max(forces_norm))
+        
+        # Denormalize forces
+        forces = torch.zeros_like(forces_norm, device=self.device)
+        forces[:, 0] = forces_norm[:, 0] - 0.5        # Fx: -0.1 to 0.1
+        forces[:, 1] = forces_norm[:, 1] * -0.4 - 10        # Fz: 9.6 to 10
+        forces[:, 2] = forces_norm[:, 2] * 0.2 - 0.1  # Mr: -0.1 to 0.1
+        
+        return forces, self.three_dof(x_t, forces)
+    
+    def loss(self, pred, truth):
+        weights = torch.ones_like(pred, device=self.device)
+        weights[:, 0] *= (math.pi/4)      # Flight path angle: ±45 degrees
+        weights[:, 1] *= 2.0      # Angle of attack: ±30 degrees
+        weights[:, 2] *= (math.pi/4)      # Pitch rate: ±90 deg/s
+        weights[:, 3] *= 10               # Velocity: 20 m/s
+        weights[:, 4:6] *= 60             # Positions: ±100m range
+
+        time_steps = pred.shape[2]
+        time_weights = torch.linspace(256.0, 256 - time_steps, time_steps, device=self.device).view(1, 1, time_steps)
+
+        # Compute Huber loss (smooth L1) for each element
+        huber_loss = F.smooth_l1_loss(pred, truth, reduction='none', beta=self._beta)
+
+        # Apply weighting and then take mean
+        return torch.mean((huber_loss / weights) * time_weights)
