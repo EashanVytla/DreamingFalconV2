@@ -1,18 +1,28 @@
 physics: 
-  refresh_rate: 0.02 # This is in ms 1/rate = hz
-  mass: 10 # kg
+  refresh_rate: 0.01 # This is in ms 1/rate = hz
+  mass: 1 # kg
   g: 9.81 # Gravity Constant
-  k: 0.25 # Drag Coefficient
+  I_yy: 1
 
 force_model:
-  input_dim: 16
+  input_dim: 10
   hidden_layers: 2
-  hidden_size: 32
-  output_dim: 6
-  state_dim: 12
+  hidden_size: 128
+  output_dim: 3
+  state_dim: 6
 
 training: 
-  num_epochs: 50
+  num_epochs: 32
   batch_size: 256
-  lr: 0.01
-  seq_len: 256
+  lr: 0.001
+  min_lr: 0.0001
+  init_seq_len: 64
+  max_seq_len: 128
+  seq_patience: 6
+  seq_sch_thresh: 0.01
+  loss_scaler: 1280
+  beta: 0.00001
+  cos_lr: False
+
+behavior:  
+  horizon: 75 # 0.75 seconds with 0.01 refresh rate
