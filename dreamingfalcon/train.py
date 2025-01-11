@@ -8,9 +8,9 @@ import yaml
 from torch.utils.tensorboard import SummaryWriter
 from dreamingfalcon.sequence_scheduler import AdaptiveSeqLengthScheduler
 
-model_directory = "models/12-26-Synthetic"
-data_directory = "data/12-26-Synthetic/train"
-log_directory = "runs/12-26"
+model_directory = "models/12-26-2-Synthetic"
+data_directory = "data/12-26-2-Synthetic/train"
+log_directory = "runs/12-26-2"
 
 def compute_gradient_norm(model):
     total_norm = 0

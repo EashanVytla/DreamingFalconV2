@@ -35,10 +35,15 @@ class WorldModel(nn.Module):
         self._rate = config.physics.refresh_rate
         self._mass = config.physics.mass
         self._g = config.physics.g
-        self._I_yy = config.physics.I_yy
         self._loss_scaler = config.training.loss_scaler
         self.epsilon = 1e-6
         self._beta = config.training.beta
+
+        self.I = torch.tensor([[config.physics.I_xx, config.physics.I_xy, config.physics.I_xz],
+                              [config.physics.I_yx, config.physics.I_yy, config.physics.I_yz],
+                              [config.physics.I_zx, config.physics.I_zy, config.physics.I_zz]], device=device, dtype=torch.float32)
+        
+        self.I_inv = torch.inverse(self.I)
 
         self.model = MLP(config.force_model.input_dim, hidden_dims, config.force_model.output_dim)
         self.model.apply(self.init_weights)
@@ -105,45 +110,55 @@ class WorldModel(nn.Module):
     def _compute_derivatives(self, x, forces):
         """
         Compute state derivatives for RK4 integration
-        State vector: [gamma, alpha, q, V, Xe, Ze]
+        State vector: Position: Xe, Ye, Ze (0:3)
+                        Velocity: U, v, w (3:6)
+                        Euler Rotation Angles: phi, theta, psi (6:9)
+                        Body Rotation Rates: p, q, r (9:12)
         
         Args:
             x: Current state vector
-            forces: [Fx, Fz, Mr] forces and moment
+            forces: [Fx, Fy, Fz, Mx, My, Mz] forces and moment
         """
-        # Extract states
-        gamma = x[:, 0]  # Flight path angle
-        alpha = x[:, 1]  # Angle of attack
-        q = x[:, 2]      # Pitch rate
-        V = x[:, 3]      # Velocity magnitude
-        # Note: Xe, Ze are positions, don't need them for derivatives
-        # print(torch.max(V))
-        
-        # Extract forces
-        Fx = forces[:, 0]
-        Fz = forces[:, 1]
-        Mr = forces[:, 2]
+        V = x[:, 3:6]
+        phi = x[:, 6]
+        theta = x[:, 7]
+        omega = x[:, 9:12]
+
+        F = forces[:, 0:3]
+        M = forces[:, 3:6]
         
         # Initialize derivative vector
         dx = torch.zeros_like(x, device=self.device)
         
         # Compute derivatives using equations of motion
-        # Velocity derivatives
-        dx[:, 3] = Fx/self._mass - self._g * torch.sin(gamma)  # V_dot
+        # Position derivatives (Earth Frame)
+        dx[:, 0:3] = V
+
+        # Velocity derivative (Earth frame)
+        dx[:, 3:6] = F/self._mass + torch.tensor([[0.0, 0.0, self._g]], device=self.device)# - torch.cross(omega, V, dim=-1)
+
+        print(dx[:, 3:6])
         
-        # Position derivatives
-        dx[:, 4] = V * torch.cos(gamma)   # Xe_dot
-        dx[:, 5] = -V * torch.sin(gamma)  # Ze_dot
-        
-        # Angular derivatives
-        alpha_dot = Fz/(self._mass * V + self.epsilon) + (self._g/(V + self.epsilon)) * torch.cos(gamma) + q
-        dx[:, 1] = alpha_dot              # alpha_dot
-        dx[:, 0] = q - alpha_dot          # gamma_dot
-        dx[:, 2] = Mr/self._I_yy         # q_dot
+        # Rotation derivative (0 is phi, 1 is theta)
+        J = torch.zeros((x.shape[0], 3, 3), device=self.device, dtype=torch.float32)
+        J[:, 0, 0] = 1
+        J[:, 0, 1] = torch.sin(phi) * torch.tan(theta)
+        J[:, 0, 2] = torch.cos(phi) * torch.tan(theta)
+        J[:, 1, 1] = torch.cos(phi)
+        J[:, 1, 2] = -torch.sin(phi)
+        J[:, 2, 1] = torch.sin(phi) / torch.clamp(torch.cos(theta), min=self.epsilon)
+        J[:, 2, 2] = torch.cos(phi) / torch.clamp(torch.cos(theta), min=self.epsilon)
+
+        dx[:, 6:9] = torch.matmul(J, omega.unsqueeze(-1)).squeeze(-1)
+
+        # Rotation rate derivative (Body-fixed frame)
+        Iw = torch.matmul(self.I, omega.unsqueeze(-1))
+        coriolis = torch.cross(omega, Iw.squeeze(-1), dim=1)
+        dx[:, 9:12] = torch.matmul(self.I_inv, (M - coriolis).unsqueeze(-1)).squeeze(-1)
         
         return dx
     
-    def three_dof(self, x_t, forces):
+    def six_dof(self, x_t, forces):
         # Use RK4 to integrate the system
         return self.solver.step(x_t, self._compute_derivatives, forces)
 
@@ -155,10 +170,10 @@ class WorldModel(nn.Module):
         # Normalize states for neural network input
         norm_x_t = torch.zeros_like(x_t, dtype=torch.float32, device=self.device)
         norm_x_t[:, 0] = x_t[:, 0] / (math.pi/4)    # Flight path angle: ±45 degrees
-        norm_x_t[:, 1] = x_t[:, 1] / 2.0     # Angle of attack: ±45 degrees
+        norm_x_t[:, 1] = x_t[:, 1] / 2.0     # Angle of attack: ±2 radians
         norm_x_t[:, 2] = x_t[:, 2] / (math.pi/4)     # Pitch rate: ±45 deg/s
         norm_x_t[:, 3] = x_t[:, 3] / 10       # Velocity: ±10 m/s
-        norm_x_t[:, 4:6] = x_t[:, 4:6] / 60          # Positions: ±100m range
+        norm_x_t[:, 4:6] = x_t[:, 4:6] / 60          # Positions: ±60m range
 
         # print(f"x_t shape: {x_t.shape}, states shape: {self.states_mean.shape}")
 

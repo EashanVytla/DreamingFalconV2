@@ -3,7 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # Load the data
-file_path = 'models/12-26-Synthetic/forces.csv'
+file_path = 'models/12-26-2-Synthetic/forces.csv'
 data = pd.read_csv(file_path, header=None, names=['Fx', 'Fy', 'M'])
 
 # Plot Fx

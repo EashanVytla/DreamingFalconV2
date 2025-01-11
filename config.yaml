@@ -2,7 +2,15 @@ physics:
   refresh_rate: 0.01 # This is in ms 1/rate = hz
   mass: 1 # kg
   g: 9.81 # Gravity Constant
-  I_yy: 1
+  I_xx: 1.0
+  I_xy: 0.0
+  I_xz: 0.0
+  I_yx: 0.0
+  I_yy: 1.0
+  I_yz: 0.0
+  I_zx: 0.0
+  I_zy: 0.0
+  I_zz: 1.0
 
 force_model:
   input_dim: 10
