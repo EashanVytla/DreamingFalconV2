@@ -107,6 +107,38 @@ class WorldModel(nn.Module):
         stackedForces = torch.stack(forces_roll, dim=2)
         return stackedForces, stacked
 
+    def get_L_EB(self, phi: torch.Tensor, theta: torch.Tensor, psi: torch.Tensor) -> torch.Tensor:
+        phi = torch.as_tensor(phi, dtype=torch.float32)
+        theta = torch.as_tensor(theta, dtype=torch.float32)
+        psi = torch.as_tensor(psi, dtype=torch.float32)
+        
+        c_phi = torch.cos(phi)
+        s_phi = torch.sin(phi)
+        c_theta = torch.cos(theta)
+        s_theta = torch.sin(theta)
+        c_psi = torch.cos(psi)
+        s_psi = torch.sin(psi)
+        
+        m11 = c_theta * c_psi
+        m12 = s_phi * s_theta * c_psi - c_phi * s_psi
+        m13 = c_phi * s_theta * c_psi + s_phi * s_psi
+        
+        m21 = c_theta * s_psi
+        m22 = s_phi * s_theta * s_psi + c_phi * c_psi
+        m23 = c_phi * s_theta * s_psi - s_phi * c_psi
+        
+        m31 = -s_theta
+        m32 = s_phi * c_theta
+        m33 = c_phi * c_theta
+        
+        row1 = torch.stack([m11, m12, m13], dim=-1)
+        row2 = torch.stack([m21, m22, m23], dim=-1)
+        row3 = torch.stack([m31, m32, m33], dim=-1)
+        
+        L_EB = torch.stack([row1, row2, row3], dim=-2)
+        
+        return L_EB
+
     def _compute_derivatives(self, x, forces):
         """
         Compute state derivatives for RK4 integration
@@ -114,14 +146,11 @@ class WorldModel(nn.Module):
                         Velocity: U, v, w (3:6)
                         Euler Rotation Angles: phi, theta, psi (6:9)
                         Body Rotation Rates: p, q, r (9:12)
-        
-        Args:
-            x: Current state vector
-            forces: [Fx, Fy, Fz, Mx, My, Mz] forces and moment
         """
         V = x[:, 3:6]
         phi = x[:, 6]
         theta = x[:, 7]
+        psi = x[:, 8]
         omega = x[:, 9:12]
 
         F = forces[:, 0:3]
@@ -132,12 +161,12 @@ class WorldModel(nn.Module):
         
         # Compute derivatives using equations of motion
         # Position derivatives (Earth Frame)
-        dx[:, 0:3] = V
+        dx[:, 0:3] = torch.matmul(self.get_L_EB(phi, theta, psi), V.unsqueeze(-1)).squeeze(-1)
 
         # Velocity derivative (Earth frame)
-        dx[:, 3:6] = F/self._mass + torch.tensor([[0.0, 0.0, self._g]], device=self.device)# - torch.cross(omega, V, dim=-1)
+        dx[:, 3:6] = F/self._mass - torch.cross(omega, V)
 
-        print(dx[:, 3:6])
+        # print(dx[:, 3:6])
         
         # Rotation derivative (0 is phi, 1 is theta)
         J = torch.zeros((x.shape[0], 3, 3), device=self.device, dtype=torch.float32)
@@ -159,7 +188,6 @@ class WorldModel(nn.Module):
         return dx
     
     def six_dof(self, x_t, forces):
-        # Use RK4 to integrate the system
         return self.solver.step(x_t, self._compute_derivatives, forces)
 
     def predict(self, x_t, actuator_input):
@@ -169,9 +197,9 @@ class WorldModel(nn.Module):
         """
         # Normalize states for neural network input
         norm_x_t = torch.zeros_like(x_t, dtype=torch.float32, device=self.device)
-        norm_x_t[:, 0] = x_t[:, 0] / (math.pi/4)    # Flight path angle: ±45 degrees
+        norm_x_t[:, 0] = x_t[:, 0] / (torch.pi/4)    # Flight path angle: ±45 degrees
         norm_x_t[:, 1] = x_t[:, 1] / 2.0     # Angle of attack: ±2 radians
-        norm_x_t[:, 2] = x_t[:, 2] / (math.pi/4)     # Pitch rate: ±45 deg/s
+        norm_x_t[:, 2] = x_t[:, 2] / (torch.pi/4)     # Pitch rate: ±45 deg/s
         norm_x_t[:, 3] = x_t[:, 3] / 10       # Velocity: ±10 m/s
         norm_x_t[:, 4:6] = x_t[:, 4:6] / 60          # Positions: ±60m range
 
@@ -198,9 +226,9 @@ class WorldModel(nn.Module):
     
     def loss(self, pred, truth):
         weights = torch.ones_like(pred, device=self.device)
-        weights[:, 0] *= (math.pi/4)      # Flight path angle: ±45 degrees
+        weights[:, 0] *= (torch.pi/4)      # Flight path angle: ±45 degrees
         weights[:, 1] *= 2.0      # Angle of attack: ±30 degrees
-        weights[:, 2] *= (math.pi/4)      # Pitch rate: ±90 deg/s
+        weights[:, 2] *= (torch.pi/4)      # Pitch rate: ±90 deg/s
         weights[:, 3] *= 10               # Velocity: 20 m/s
         weights[:, 4:6] *= 60             # Positions: ±100m range
 

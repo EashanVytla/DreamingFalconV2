@@ -5,6 +5,7 @@ from pathlib import Path
 from dreamingfalcon.world_model import WorldModel
 from dreamingfalcon.utils import AttrDict
 import yaml
+import math
 
 class TestSixDOF(unittest.TestCase):
     def setUp(self):
@@ -31,9 +32,11 @@ class TestSixDOF(unittest.TestCase):
         # Extract forces and states
         forces = torch.tensor(df.iloc[:, :6].values, dtype=torch.float32, device=self.device)  # First 6 columns: Fx, Fy, Fz, Mx, My, Mz
         states = torch.tensor(df.iloc[:, 6:18].values, dtype=torch.float32, device=self.device)  # Next 12 columns are states
-        
+        angle_wrap = 0
+
         print("\nTesting 6dof integration:")
         print(f"Loaded {len(states)} timesteps of data")
+        adjustment = torch.zeros((1, 3), device=self.device, dtype=torch.float32)
         
         # Test integration for each consecutive pair of states
         for i in range(len(states) - 1):
@@ -44,6 +47,10 @@ class TestSixDOF(unittest.TestCase):
             
             # Ground truth next state
             next_state_true = states[i+1:i+2]
+
+            # diff = next_state_true[:, 6:9] - current_state[:, 6:9]
+            # adjustment += torch.where(torch.abs(diff) > (2 * torch.pi - 1e-4), torch.sign(diff) * (2 * torch.pi), torch.zeros_like(diff))
+            # next_state_true[:, 6:9] += adjustment
             
             # Integrate to get next state
             next_state_pred = self.model.six_dof(current_state, current_forces)
@@ -54,6 +61,8 @@ class TestSixDOF(unittest.TestCase):
             
             max_rel_error = torch.max(relative_errors).item()
             mean_rel_error = torch.mean(relative_errors).item()
+
+            prev_state = current_state
             
             if i < 5 or max_rel_error > 0.1 or mean_rel_error > 0.1:  # Print first 5 steps
                 print(f"\nTimestep {i}:")
