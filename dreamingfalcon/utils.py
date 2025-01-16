@@ -12,10 +12,6 @@ import math
 
 #     return rotated_vector
 
-def unwrap(x):
-    y = x % (2 * math.pi)
-    return torch.where(y > math.pi, 2*math.pi - y, y)
-
 def euclidean_distance(p, q):
     return torch.norm(p - q)
 

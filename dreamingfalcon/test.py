@@ -7,9 +7,9 @@ from dreamingfalcon.utils import AttrDict
 import yaml
 import csv
 
-model_directory = "models/12-26-Synthetic"
-data_directory = "data/12-26-Synthetic/test2"
-log_directory = "runs/12-26"
+model_directory = "models/12-26-2-Synthetic"
+data_directory = "data/12-26-2-Synthetic/train"
+log_directory = "runs/12-26-2"
 
 def tensor_to_numpy(tensor):
     return tensor.detach().cpu().numpy()
