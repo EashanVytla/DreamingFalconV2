@@ -16,8 +16,9 @@ class MLP(nn.Module):
         for i in range(1, len(hidden_dims)):
             layers.append(nn.Linear(hidden_dims[i-1], hidden_dims[i]))
             # layers.append(nn.LayerNorm(hidden_dims[i]))
-            layers.append(nn.LeakyReLU())
-            layers.append(nn.Dropout(p=0.1))
+            # layers.append(nn.ReLU())
+            layers.append(nn.Softplus())
+            # layers.append(nn.Dropout(p=0.4))
 
         layers.append(nn.Linear(hidden_dims[-1], output_dim))
         
@@ -46,17 +47,9 @@ class WorldModel(nn.Module):
         self.I_inv = torch.inverse(self.I)
 
         self.model = MLP(config.force_model.input_dim, hidden_dims, config.force_model.output_dim)
-        self.model.apply(self.init_weights)
         self.device = device
 
         self.solver = RK4_Solver(dt=self._rate)
-
-    def init_weights(self, layer):
-        if isinstance(layer, nn.Linear):
-            # Example 1: Xavier Initialization (Good for Tanh/Sigmoid)
-            nn.init.xavier_uniform_(layer.weight)
-            if layer.bias is not None:
-                nn.init.zeros_(layer.bias)
     
     def compute_normalization_stats(self, dataloader):
         states_list = []
@@ -91,7 +84,7 @@ class WorldModel(nn.Module):
         forces_roll = []
         prev_x = None
         for i in range(1, seq_len):
-            forces, pred = self.predict(x_roll[i-1], act_inps[:, :, i])
+            forces, pred = self.predict(x_roll[i-1], act_inps[:, :, i-1])
             if torch.max(pred).item() > 1000 or torch.min(pred).item() < -1000:
                 print(f"Warning: Large values detected at step {i}: {torch.max(pred)}")
 
@@ -191,17 +184,17 @@ class WorldModel(nn.Module):
         return self.solver.step(x_t, self._compute_derivatives, forces)
 
     def predict(self, x_t, actuator_input):
-        """
-        Predict next state using forces from MLP and RK4 integration
-        State vector: [gamma, alpha, q, V, Xe, Ze]
-        """
+        '''
+        input vector: Velocity: U, v, w (0:3)
+                        Euler Rotation Angles: phi, theta, psi (3:6)
+                        Body Rotation Rates: p, q, r (6:9)
+        '''
         # Normalize states for neural network input
-        norm_x_t = torch.zeros_like(x_t, dtype=torch.float32, device=self.device)
-        norm_x_t[:, 0] = x_t[:, 0] / (torch.pi/4)    # Flight path angle: ±45 degrees
-        norm_x_t[:, 1] = x_t[:, 1] / 2.0     # Angle of attack: ±2 radians
-        norm_x_t[:, 2] = x_t[:, 2] / (torch.pi/4)     # Pitch rate: ±45 deg/s
-        norm_x_t[:, 3] = x_t[:, 3] / 10       # Velocity: ±10 m/s
-        norm_x_t[:, 4:6] = x_t[:, 4:6] / 60          # Positions: ±60m range
+        norm_x_t = torch.zeros((x_t.shape[0], 9), dtype=torch.float32, device=self.device)
+        # norm_x_t[:, 0:3] = x_t[:, 0:3] / 200    # Position: +- 200
+        norm_x_t[:, 0:3] = x_t[:, 3:6] / 20.0     # Velocity: +- 20
+        norm_x_t[:, 3:6] = x_t[:, 6:9] / torch.pi     # Euler Angles: +- pi
+        norm_x_t[:, 6:9] = x_t[:, 9:12] / (torch.pi/4)       # Rotation Rates: +- pi/4
 
         # print(f"x_t shape: {x_t.shape}, states shape: {self.states_mean.shape}")
 
@@ -210,33 +203,34 @@ class WorldModel(nn.Module):
 
         # Normalize actuator inputs
         norm_act = (actuator_input - 1500) / 500       # Actuator inputs: 1000-2000 range
+        # print(norm_act)
         
         # Get forces from MLP
-        inp = torch.cat((norm_x_t, norm_act), dim=1)
+        inp = torch.cat((norm_act, norm_x_t), dim=1)
         forces_norm = self.model(inp)
-        # print(torch.max(forces_norm))
-        
+    
         # Denormalize forces
         forces = torch.zeros_like(forces_norm, device=self.device)
-        forces[:, 0] = forces_norm[:, 0] - 0.5        # Fx: -0.1 to 0.1
-        forces[:, 1] = forces_norm[:, 1] * -0.4 - 10        # Fz: 9.6 to 10
-        forces[:, 2] = forces_norm[:, 2] * 0.2 - 0.1  # Mr: -0.1 to 0.1
+        forces[:, 0:3] = forces_norm[:, 0:3] * 10        # F: -10 to 10
+        forces[:, 3:6] = forces_norm[:, 3:6]        # M: -0.5 to 0.5
+
+        print(torch.max(forces, dim=0))
         
-        return forces, self.three_dof(x_t, forces)
+        return forces, self.six_dof(x_t, forces)
     
     def loss(self, pred, truth):
         weights = torch.ones_like(pred, device=self.device)
-        weights[:, 0] *= (torch.pi/4)      # Flight path angle: ±45 degrees
-        weights[:, 1] *= 2.0      # Angle of attack: ±30 degrees
-        weights[:, 2] *= (torch.pi/4)      # Pitch rate: ±90 deg/s
-        weights[:, 3] *= 10               # Velocity: 20 m/s
-        weights[:, 4:6] *= 60             # Positions: ±100m range
 
-        time_steps = pred.shape[2]
-        time_weights = torch.linspace(256.0, 256 - time_steps, time_steps, device=self.device).view(1, 1, time_steps)
+        weights[:, 0:3] *= 200    # Position: +- 200
+        weights[:, 3:6] *= 20.0     # Velocity: +- 20
+        weights[:, 6:9] *= torch.pi     # Euler Angles: +- pi
+        weights[:, 9:12] *= (torch.pi/4)       # Rotation Rates: +- pi/4
 
-        # Compute Huber loss (smooth L1) for each element
+        # time_steps = pred.shape[2]
+        # time_weights = torch.linspace(64, 64 - time_steps, time_steps, device=self.device).view(1, 1, time_steps)
+
+        # huber_loss = F.smooth_l1_loss(torch.cat((pred[:, 3:6], pred[:, 6:9]), dim=-1), torch.cat((truth[:, 3:6], truth[:, 6:9]), dim=-1), reduction='none', beta=self._beta)
         huber_loss = F.smooth_l1_loss(pred, truth, reduction='none', beta=self._beta)
 
-        # Apply weighting and then take mean
-        return torch.mean((huber_loss / weights) * time_weights)
+        # return torch.mean((huber_loss / weights) * time_weights)
+        return torch.mean(huber_loss)

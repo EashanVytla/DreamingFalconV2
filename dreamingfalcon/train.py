@@ -7,10 +7,11 @@ from dreamingfalcon.utils import AttrDict
 import yaml
 from torch.utils.tensorboard import SummaryWriter
 from dreamingfalcon.sequence_scheduler import AdaptiveSeqLengthScheduler
+import pandas as pd
 
-model_directory = "models/12-26-2-Synthetic"
-data_directory = "data/12-26-2-Synthetic/train"
-log_directory = "runs/12-26-2"
+model_directory = "models/1-30-Synthetic"
+data_directory = "data/1-27-Synthetic"
+log_directory = "runs/1-30"
 
 def compute_gradient_norm(model):
     total_norm = 0
@@ -43,21 +44,21 @@ def main():
 
     model = WorldModel(config, device).to(device)
 
-    #optimizer = torch.optim.SGD(model.parameters(), lr=config.training.lr)
-    optimizer = torch.optim.Adam(model.parameters(), lr=config.training.lr, weight_decay=0.0001)
+    # optimizer = torch.optim.SGD(model.parameters(), momentum=0.9, lr=config.training.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=config.training.lr, weight_decay=config.training.weight_decay)
     if config.training.cos_lr:
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=45, eta_min=config.training.min_lr, verbose=True
+            optimizer, T_max=25, eta_min=config.training.min_lr, verbose=True
         )
 
     writer = SummaryWriter(log_directory)
 
-    seq_scheduler = AdaptiveSeqLengthScheduler(initial_length=config.training.init_seq_len, max_length=config.training.max_seq_len, patience=config.training.seq_patience, threshold=config.training.seq_sch_thresh)
+    seq_scheduler = AdaptiveSeqLengthScheduler(initial_length=config.training.init_seq_len, max_length=config.training.max_seq_len, patience=config.training.seq_patience, threshold=config.training.seq_sch_thresh, model=model, config=config)
 
-    pipeline = Pipeline(os.path.join(data_directory, "states.csv"), os.path.join(data_directory, "actions.csv"), seq_len=1)
+    pipeline = Pipeline(os.path.join(data_directory, "train/states.csv"), os.path.join(data_directory, "train/actions.csv"), os.path.join(data_directory, "val/forces.csv"), seq_len=1)
     dataloader = pipeline.read_csv(batch_size=config.training.batch_size)
     
-    model.compute_normalization_stats(dataloader)
+    # model.compute_normalization_stats(dataloader)
     # epoch = 0
 
     for epoch in range(config.training.num_epochs):
@@ -66,17 +67,21 @@ def main():
         # for name, param in model.named_parameters():
         #     print(f"{name}: {param.data.norm().item():.6f}")
         print(f"Seq Length: {seq_scheduler.current_length}")
-        pipeline = Pipeline(os.path.join(data_directory, "states.csv"), os.path.join(data_directory, "actions.csv"), seq_len=seq_scheduler.current_length)
+        pipeline = Pipeline(os.path.join(data_directory, "train/states.csv"), os.path.join(data_directory, "train/actions.csv"), os.path.join(data_directory, "val/forces.csv"), seq_len=seq_scheduler.current_length)
         dataloader = pipeline.read_csv(batch_size=config.training.batch_size)
 
-        for batch_count, (states, actions) in enumerate(tqdm(dataloader, desc=f"Epoch {epoch}")):
+
+        for batch_count, (states, actions, forces) in enumerate(tqdm(dataloader, desc=f"Epoch {epoch}")):
             states = states.to(device)
             actions = actions.to(device)
+            forces = forces.to(device)
             optimizer.zero_grad()
 
-            _, pred_traj = model.rollout(states[:,:,0], actions, seq_scheduler.current_length)
+            pred_forces, pred_traj = model.rollout(states[:,:,0], actions, seq_scheduler.current_length)
 
-            loss = model.loss(pred_traj[:,:,1:], states[:,:,1:])
+            # loss = model.loss(pred_traj[:,:,1:], states[:,:,1:])
+            loss = model.loss(pred_forces[:, :, 0], forces[:, :, 0])
+            # loss = model.loss(pred_traj[:,:,-1], states[:,:,-1])
 
             # print(f"Loss: {loss}")
 
@@ -87,7 +92,7 @@ def main():
             #     print(torch.min(states))
             # else:
             #     print(f"Gradient Norm: {grad_norm}")
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
         # Track total gradient norm
@@ -104,10 +109,10 @@ def main():
 
     state = {
         "state_dict": model.state_dict(),
-        "states_mean": model.states_mean,
-        "states_std": model.states_std,
-        "actions_mean": model.actions_mean,
-        "actions_std": model.actions_std
+        # "states_mean": model.states_mean,
+        # "states_std": model.states_std,
+        # "actions_mean": model.actions_mean,
+        # "actions_std": model.actions_std
     }
 
     torch.save(state, os.path.join(model_directory, "model.pt"))

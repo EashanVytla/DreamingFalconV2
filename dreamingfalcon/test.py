@@ -7,9 +7,9 @@ from dreamingfalcon.utils import AttrDict
 import yaml
 import csv
 
-model_directory = "models/12-26-2-Synthetic"
-data_directory = "data/12-26-2-Synthetic/train"
-log_directory = "runs/12-26-2"
+model_directory = "models/1-30-Synthetic"
+data_directory = "data/1-27-Synthetic/train"
+log_directory = "runs/1-30"
 
 def tensor_to_numpy(tensor):
     return tensor.detach().cpu().numpy()
@@ -32,10 +32,10 @@ def main():
     model_path = os.path.join(model_directory, "model.pt")
     state = torch.load(model_path)
     model.load_state_dict(state["state_dict"])
-    model.states_mean = state["states_mean"]
-    model.states_std = state["states_std"]
-    model.actions_mean = state["actions_mean"]
-    model.actions_std = state["actions_std"]
+    # model.states_mean = state["states_mean"]
+    # model.states_std = state["states_std"]
+    # model.actions_mean = state["actions_mean"]
+    # model.actions_std = state["actions_std"]
 
     output_file = os.path.join(model_directory, "test.csv")
     forces_file = os.path.join(model_directory, "forces.csv")

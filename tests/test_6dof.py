@@ -26,7 +26,7 @@ class TestSixDOF(unittest.TestCase):
     def test_six_dof_integration(self):
         """Test 6dof integration against recorded data"""
         # Load test data
-        excel_path = Path("tests/data/6dofTestData.csv")
+        excel_path = Path("tests/data/6dofTestData4.csv")
         df = pd.read_csv(excel_path, header=None)
         
         # Extract forces and states
@@ -64,7 +64,7 @@ class TestSixDOF(unittest.TestCase):
 
             prev_state = current_state
             
-            if i < 5 or max_rel_error > 0.1 or mean_rel_error > 0.1:  # Print first 5 steps
+            if i < 5 or max_rel_error > 0.01 or mean_rel_error > 0.01:  # Print first 5 steps
                 print(f"\nTimestep {i}:")
                 print(f"Forces: {current_forces.cpu().numpy()}")
                 print(f"Current state: {current_state.cpu().numpy()}")
@@ -75,7 +75,7 @@ class TestSixDOF(unittest.TestCase):
                 print(f"Mean relative error: {mean_rel_error:.6f}")
                 
                 # Print specific components with large errors
-                if max_rel_error > 0.1:
+                if max_rel_error > 0.00001:
                     component_errors = (next_state_pred - next_state_true) / next_state_true
                     large_error_indices = torch.where(torch.abs(component_errors) > 0.1)[1]
                     print("\nLarge errors in components:")
