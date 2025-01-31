@@ -10,7 +10,7 @@ from dreamingfalcon.sequence_scheduler import AdaptiveSeqLengthScheduler
 import pandas as pd
 
 model_directory = "models/1-30-Synthetic"
-data_directory = "data/1-27-Synthetic"
+data_directory = "data/1-30-Synthetic"
 log_directory = "runs/1-30"
 
 def compute_gradient_norm(model):
@@ -77,11 +77,18 @@ def main():
             forces = forces.to(device)
             optimizer.zero_grad()
 
-            pred_forces, pred_traj = model.rollout(states[:,:,0], actions, seq_scheduler.current_length)
+            # pred_forces, pred_traj = model.rollout(states[:,:,0], actions, seq_scheduler.current_length)
 
             # loss = model.loss(pred_traj[:,:,1:], states[:,:,1:])
-            loss = model.loss(pred_forces[:, :, 0], forces[:, :, 0])
+            # print(forces.shape)
+            # loss = model.loss(pred_forces[:, :, 0], forces[:, :, 0])
             # loss = model.loss(pred_traj[:,:,-1], states[:,:,-1])
+
+            pred_forces, x_t = model.predict(states[:, :, 0], actions[:, :, 0])
+
+            # print(f"Predicted forces shape: {pred_forces.shape}")
+            # print(f"Ground truth forces shape: {forces.shape}")
+            loss = model.loss(pred_forces, forces[:, :, 0])
 
             # print(f"Loss: {loss}")
 

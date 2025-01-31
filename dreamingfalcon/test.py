@@ -8,7 +8,7 @@ import yaml
 import csv
 
 model_directory = "models/1-30-Synthetic"
-data_directory = "data/1-27-Synthetic/train"
+data_directory = "data/1-30-Synthetic/train"
 log_directory = "runs/1-30"
 
 def tensor_to_numpy(tensor):

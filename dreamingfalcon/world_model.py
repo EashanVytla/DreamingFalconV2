@@ -202,17 +202,17 @@ class WorldModel(nn.Module):
         # norm_act = (actuator_input - self.actions_mean.T)/self.actions_std.T
 
         # Normalize actuator inputs
-        norm_act = (actuator_input - 1500) / 500       # Actuator inputs: 1000-2000 range
+        norm_act = (actuator_input - 1500) / 3000       # Actuator inputs: -1500-4500 range
         # print(norm_act)
         
         # Get forces from MLP
         inp = torch.cat((norm_act, norm_x_t), dim=1)
-        forces_norm = self.model(inp)
+        forces_norm = self.model(norm_act)
     
         # Denormalize forces
         forces = torch.zeros_like(forces_norm, device=self.device)
         forces[:, 0:3] = forces_norm[:, 0:3] * 10        # F: -10 to 10
-        forces[:, 3:6] = forces_norm[:, 3:6]        # M: -0.5 to 0.5
+        forces[:, 3:6] = forces_norm[:, 3:6] * 0.05        # M: -0.5 to 0.5
 
         print(torch.max(forces, dim=0))
         
