@@ -212,7 +212,7 @@ class WorldModel(nn.Module):
         # Denormalize forces
         forces = torch.zeros_like(forces_norm, device=self.device)
         forces[:, 0:3] = forces_norm[:, 0:3] * 10        # F: -10 to 10
-        forces[:, 3:6] = forces_norm[:, 3:6]        # M: -0.5 to 0.5
+        forces[:, 3:6] = forces_norm[:, 3:6] * 0.05        # M: -0.5 to 0.5
 
         print(torch.max(forces, dim=0))
         
