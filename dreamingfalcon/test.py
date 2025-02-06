@@ -7,9 +7,10 @@ from dreamingfalcon.utils import AttrDict
 import yaml
 import csv
 
-model_directory = "models/1-30-Synthetic"
-data_directory = "data/1-30-Synthetic/train"
-log_directory = "runs/1-30"
+model_directory = "models/1-31-2-Synthetic"
+output_directory = "output/1-31-2-Synthetic"
+data_directory = "data/1-31-2-Synthetic/train"
+log_directory = "runs/1-31-2"
 
 def tensor_to_numpy(tensor):
     return tensor.detach().cpu().numpy()
@@ -20,25 +21,25 @@ def main():
 
     config = AttrDict.from_dict(config_dict)
 
-    if torch.cuda.is_available():
-        device = torch.device("cuda")  # Use the GPU
-        print("Using GPU:", torch.cuda.get_device_name(0)) 
-    else:
-        device = torch.device("cpu")  # Use the CPU
-        print("Using CPU")
+    # if torch.cuda.is_available():
+    #     device = torch.device("cuda")  # Use the GPU
+    #     print("Using GPU:", torch.cuda.get_device_name(0)) 
+    # else:
+    device = torch.device("cpu")  # Use the CPU
+    print("Using CPU")
 
     model = WorldModel(config, device).to(device)
     
     model_path = os.path.join(model_directory, "model.pt")
     state = torch.load(model_path)
     model.load_state_dict(state["state_dict"])
-    # model.states_mean = state["states_mean"]
-    # model.states_std = state["states_std"]
-    # model.actions_mean = state["actions_mean"]
-    # model.actions_std = state["actions_std"]
+    model.states_mean = state["states_mean"]
+    model.states_std = state["states_std"]
+    model.actions_mean = state["actions_mean"]
+    model.actions_std = state["actions_std"]
 
     output_file = os.path.join(model_directory, "test.csv")
-    forces_file = os.path.join(model_directory, "forces.csv")
+    forces_file = os.path.join(output_directory, "forces.csv")
 
     states_df = pd.read_csv(os.path.join(data_directory, "states.csv"), header=None)
     actions_df = pd.read_csv(os.path.join(data_directory, "actions.csv"), header=None)

@@ -32,7 +32,7 @@ def compute_l1_errors(file1_path, file2_path):
 
 if __name__ == "__main__":
     # Replace these with your actual file paths
-    file1_path = "data/1-27-Synthetic/val/forces.csv"
-    file2_path = "models/1-30-Synthetic/forces.csv"
+    file1_path = "data/1-31-2-Synthetic/val/forces.csv"
+    file2_path = "output/1-31-2-Synthetic/forces.csv"
     
     errors = compute_l1_errors(file1_path, file2_path)

@@ -4,8 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Load both datasets
-data1_path = 'models/1-30-Synthetic/forces.csv'
-data2_path = "data/1-27-Synthetic/val/forces.csv"
+data1_path = 'output/1-31-2-Synthetic/forces.csv'
+data2_path = "data/1-31-2-Synthetic/val/forces.csv"
 data1 = pd.read_csv(data1_path, header=None, names=['Fx', 'Fy', 'Fz', 'Mx', 'My', 'Mz'])
 data2 = pd.read_csv(data2_path, header=None, usecols=[0, 1, 2, 3, 4, 5], names=['Fx', 'Fy', 'Fz', 'Mx', 'My', 'Mz'])
 

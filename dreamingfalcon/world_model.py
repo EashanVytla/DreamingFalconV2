@@ -15,10 +15,7 @@ class MLP(nn.Module):
         hidden_dims = [input_dim] + hidden_dims
         for i in range(1, len(hidden_dims)):
             layers.append(nn.Linear(hidden_dims[i-1], hidden_dims[i]))
-            # layers.append(nn.LayerNorm(hidden_dims[i]))
-            # layers.append(nn.ReLU())
-            layers.append(nn.Softplus())
-            # layers.append(nn.Dropout(p=0.4))
+            layers.append(nn.ReLU())
 
         layers.append(nn.Linear(hidden_dims[-1], output_dim))
         
@@ -47,20 +44,41 @@ class WorldModel(nn.Module):
         self.I_inv = torch.inverse(self.I)
 
         self.model = MLP(config.force_model.input_dim, hidden_dims, config.force_model.output_dim)
+        # self.init_weights()
         self.device = device
 
         self.solver = RK4_Solver(dt=self._rate)
-    
+
+    def init_weights(self):
+        def xavier_init(model):
+            for m in model.modules():
+                if isinstance(m, nn.Linear):
+                    nn.init.xavier_uniform_(m.weight)
+                    if m.bias is not None:
+                        nn.init.zeros_(m.bias)
+
+        def uniform_init(model):
+            for m in model.modules():
+                if isinstance(m, nn.Linear):
+                    nn.init.normal_(m.weight, mean=0, std=0.01)
+                    if m.bias is not None:
+                        nn.init.zeros_(m.bias)
+        
+        self.model.apply(uniform_init)
+
     def compute_normalization_stats(self, dataloader):
         states_list = []
         actions_list = []
-        
-        for states, actions in dataloader:
+        forces_list = []
+
+        for states, actions, forces in dataloader:
             states_list.append(states)
             actions_list.append(actions)
+            forces_list.append(forces)
         
         all_states = torch.cat(states_list, dim=0)
         all_actions = torch.cat(actions_list, dim=0)
+        all_forces = torch.cat(forces_list, dim=0)
         
         self.states_mean = all_states.mean(dim=0)
         self.states_std = all_states.std(dim=0) + self.epsilon
@@ -68,16 +86,23 @@ class WorldModel(nn.Module):
         self.actions_mean = all_actions.mean(dim=0)
         self.actions_std = all_actions.std(dim=0) + self.epsilon
 
+        self.forces_mean = all_forces.mean(dim=0)
+        self.forces_std = all_forces.std(dim=0) + self.epsilon
+
         self.states_mean = self.states_mean.to(device=self.device)
         self.states_std = self.states_std.to(device=self.device)
         self.actions_mean = self.actions_mean.to(device=self.device)
         self.actions_std = self.actions_std.to(device=self.device)
+        self.forces_mean = self.forces_mean.to(device=self.device)
+        self.forces_std = self.forces_std.to(device=self.device)
 
         print(f"Data statistics: ")
         print(f"States mean: {self.states_mean}")
         print(f"States std: {self.states_std}")
         print(f"Actions mean: {self.actions_mean}")
-        print(f"Actions mean: {self.actions_std}")
+        print(f"Actions std: {self.actions_std}")
+        print(f"forces mean: {self.forces_mean}")
+        print(f"forces std: {self.forces_std}")
 
     def rollout(self, x_t, act_inps, seq_len):
         x_roll = [x_t]
@@ -202,35 +227,49 @@ class WorldModel(nn.Module):
         # norm_act = (actuator_input - self.actions_mean.T)/self.actions_std.T
 
         # Normalize actuator inputs
-        norm_act = (actuator_input - 1500) / 3000       # Actuator inputs: -1500-4500 range
+        # norm_act = (actuator_input - 1500) / 500       # Actuator inputs: -1500-4500 range
+        with torch.no_grad():
+            # norm_act = (actuator_input - 1.5) / 4.5
+            norm_act = (actuator_input - self.actions_mean.T)/self.actions_std.T
+
         # print(norm_act)
         
         # Get forces from MLP
         inp = torch.cat((norm_act, norm_x_t), dim=1)
         forces_norm = self.model(norm_act)
     
-        # Denormalize forces
-        forces = torch.zeros_like(forces_norm, device=self.device)
-        forces[:, 0:3] = forces_norm[:, 0:3] * 10        # F: -10 to 10
-        forces[:, 3:6] = forces_norm[:, 3:6] * 0.05        # M: -0.5 to 0.5
+        with torch.no_grad():
+            # # Denormalize forces
+            forces = torch.zeros_like(forces_norm, device=self.device)
+            # forces[:, 0:2] = forces_norm[:, 0:2] * 0.1
+            # forces[:, 2] = forces_norm[:, 2] * 5        # F: -10 to 10
+            # forces[:, 3:6] = forces_norm[:, 3:6] * 0.025        # M: -0.5 to 0.5
+            # forces = (forces_norm - )
 
-        print(torch.max(forces, dim=0))
+        # print(torch.max(forces_norm, dim=0))
         
-        return forces, self.six_dof(x_t, forces)
+        return forces_norm, self.six_dof(x_t, forces)
     
     def loss(self, pred, truth):
-        weights = torch.ones_like(pred, device=self.device)
+        with torch.no_grad():
+            # weights = torch.ones_like(pred, device=self.device)
 
-        weights[:, 0:3] *= 200    # Position: +- 200
-        weights[:, 3:6] *= 20.0     # Velocity: +- 20
-        weights[:, 6:9] *= torch.pi     # Euler Angles: +- pi
-        weights[:, 9:12] *= (torch.pi/4)       # Rotation Rates: +- pi/4
+            # weights[:, 0:2] *= 0.1    # Position: +- 200
+            # weights[:, 2] *= 5     # Velocity: +- 20
+            # weights[:, 3:6] *= 0.025
+            # norm_truth = torch.zeros_like(truth)
+            norm_truth = (truth - self.forces_mean.T) / self.forces_std.T
+        # weights[:, 6:9] *= torch.pi     # Euler Angles: +- pi
+        # weights[:, 9:12] *= (torch.pi/4)       # Rotation Rates: +- pi/4
 
         # time_steps = pred.shape[2]
         # time_weights = torch.linspace(64, 64 - time_steps, time_steps, device=self.device).view(1, 1, time_steps)
 
+        # print(pred.shape)
         # huber_loss = F.smooth_l1_loss(torch.cat((pred[:, 3:6], pred[:, 6:9]), dim=-1), torch.cat((truth[:, 3:6], truth[:, 6:9]), dim=-1), reduction='none', beta=self._beta)
-        huber_loss = F.smooth_l1_loss(pred, truth, reduction='none', beta=self._beta)
+        huber_loss = F.smooth_l1_loss(pred, norm_truth, reduction='none', beta=self._beta)
+
+        loss_vec = torch.mean(huber_loss, dim=0)
 
         # return torch.mean((huber_loss / weights) * time_weights)
-        return torch.mean(huber_loss)
+        return torch.mean(huber_loss), loss_vec
