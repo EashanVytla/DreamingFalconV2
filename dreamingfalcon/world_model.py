@@ -44,7 +44,7 @@ class WorldModel(nn.Module):
         self.I_inv = torch.inverse(self.I)
 
         self.model = MLP(config.force_model.input_dim, hidden_dims, config.force_model.output_dim)
-        # self.init_weights()
+        self.init_weights()
         self.device = device
 
         self.solver = RK4_Solver(dt=self._rate)
@@ -111,7 +111,7 @@ class WorldModel(nn.Module):
         for i in range(1, seq_len):
             forces, pred = self.predict(x_roll[i-1], act_inps[:, :, i-1])
             if torch.max(pred).item() > 1000 or torch.min(pred).item() < -1000:
-                print(f"Warning: Large values detected at step {i}: {torch.max(pred)}")
+                print(f"Warning: Large values detected at step {i}: {torch.max(pred).item()}")
 
             if prev_x is not None:
                 delta = torch.abs(pred - prev_x).max().item()
@@ -178,7 +178,7 @@ class WorldModel(nn.Module):
         dx = torch.zeros_like(x, device=self.device)
         
         # Compute derivatives using equations of motion
-        # Position derivatives (Earth Frame)
+        # Position derivatives (Earth frame)
         dx[:, 0:3] = torch.matmul(self.get_L_EB(phi, theta, psi), V.unsqueeze(-1)).squeeze(-1)
 
         # Velocity derivative (Earth frame)
@@ -238,19 +238,19 @@ class WorldModel(nn.Module):
         inp = torch.cat((norm_act, norm_x_t), dim=1)
         forces_norm = self.model(norm_act)
     
-        with torch.no_grad():
-            # # Denormalize forces
-            forces = torch.zeros_like(forces_norm, device=self.device)
-            # forces[:, 0:2] = forces_norm[:, 0:2] * 0.1
-            # forces[:, 2] = forces_norm[:, 2] * 5        # F: -10 to 10
-            # forces[:, 3:6] = forces_norm[:, 3:6] * 0.025        # M: -0.5 to 0.5
-            # forces = (forces_norm - )
+        forces = (forces_norm * self.forces_std.T) + self.forces_mean.T
+        # # Denormalize forces
+        # forces[:, 0:2] = forces_norm[:, 0:2] * 0.1
+        # forces[:, 2] = forces_norm[:, 2] * 5        # F: -10 to 10
+        # forces[:, 3:6] = forces_norm[:, 3:6] * 0.025        # M: -0.5 to 0.5
+        # forces = (forces_norm - )
 
         # print(torch.max(forces_norm, dim=0))
         
         return forces_norm, self.six_dof(x_t, forces)
     
     def loss(self, pred, truth):
+        norm_pred = (pred - self.states_mean.T) / self.states_std.T
         with torch.no_grad():
             # weights = torch.ones_like(pred, device=self.device)
 
@@ -258,7 +258,7 @@ class WorldModel(nn.Module):
             # weights[:, 2] *= 5     # Velocity: +- 20
             # weights[:, 3:6] *= 0.025
             # norm_truth = torch.zeros_like(truth)
-            norm_truth = (truth - self.forces_mean.T) / self.forces_std.T
+            norm_truth = (truth - self.states_mean.T) / self.states_std.T
         # weights[:, 6:9] *= torch.pi     # Euler Angles: +- pi
         # weights[:, 9:12] *= (torch.pi/4)       # Rotation Rates: +- pi/4
 
@@ -267,9 +267,7 @@ class WorldModel(nn.Module):
 
         # print(pred.shape)
         # huber_loss = F.smooth_l1_loss(torch.cat((pred[:, 3:6], pred[:, 6:9]), dim=-1), torch.cat((truth[:, 3:6], truth[:, 6:9]), dim=-1), reduction='none', beta=self._beta)
-        huber_loss = F.smooth_l1_loss(pred, norm_truth, reduction='none', beta=self._beta)
-
-        loss_vec = torch.mean(huber_loss, dim=0)
+        huber_loss = F.smooth_l1_loss(norm_pred, norm_truth, reduction='none', beta=self._beta)
 
         # return torch.mean((huber_loss / weights) * time_weights)
-        return torch.mean(huber_loss), loss_vec
+        return torch.mean(huber_loss)

@@ -8,6 +8,7 @@ import yaml
 from torch.utils.tensorboard import SummaryWriter
 from dreamingfalcon.sequence_scheduler import AdaptiveSeqLengthScheduler
 import pandas as pd
+import torch.nn.functional as F
 
 model_directory = "models/1-31-2-Synthetic"
 data_directory = "data/1-31-2-Synthetic"
@@ -88,18 +89,22 @@ def main():
             forces = forces.to(device)
             optimizer.zero_grad()
 
-            # pred_forces, pred_traj = model.rollout(states[:,:,0], actions, seq_scheduler.current_length)
+            pred_forces, pred_traj = model.rollout(states[:,:,0], actions, seq_scheduler.current_length)
 
             # loss = model.loss(pred_traj[:,:,1:], states[:,:,1:])
             # print(forces.shape)
             # loss = model.loss(pred_forces[:, :, 0], forces[:, :, 0])
-            # loss = model.loss(pred_traj[:,:,-1], states[:,:,-1])
+            loss = model.loss(pred_traj[:,:,-1], states[:,:,-1])
 
-            pred_forces, x_t = model.predict(states[:, :, 0], actions[:, :, 0])
+            # err = F.smooth_l1_loss(pred_forces[:, :, 0], forces[:, :, 0])
+            # force_err = torch.mean(err, dim=0)
+            # print(err.shape)
+
+            # pred_forces, x_t = model.predict(states[:, :, 0], actions[:, :, 0])
 
             # print(f"Predicted forces shape: {pred_forces.shape}")
             # print(f"Ground truth forces shape: {forces.shape}")
-            loss, loss_vec = model.loss(pred_forces, forces[:, :, 0])
+            # loss, loss_vec = model.loss(pred_forces, forces[:, :, 0])
 
             # print(f"Loss: {loss}")
 
@@ -119,12 +124,24 @@ def main():
         # Track total weight norm
         weight_norm = compute_weight_norm(model)
         writer.add_scalar("Weights/total_norm", weight_norm, epoch)
-        writer.add_scalar("Loss/fx", loss_vec[0], epoch)
-        writer.add_scalar("Loss/fy", loss_vec[1], epoch)
-        writer.add_scalar("Loss/fz", loss_vec[2], epoch)
-        writer.add_scalar("Loss/Mx", loss_vec[3], epoch)
-        writer.add_scalar("Loss/My", loss_vec[4], epoch)
-        writer.add_scalar("Loss/Mz", loss_vec[5], epoch)
+        # writer.add_scalar("Loss/1", loss_vec[0], epoch)
+        # writer.add_scalar("Loss/2", loss_vec[1], epoch)
+        # writer.add_scalar("Loss/3", loss_vec[2], epoch)
+        # writer.add_scalar("Loss/4", loss_vec[3], epoch)
+        # writer.add_scalar("Loss/5", loss_vec[4], epoch)
+        # writer.add_scalar("Loss/6", loss_vec[5], epoch)
+        # writer.add_scalar("Loss/7", loss_vec[6], epoch)
+        # writer.add_scalar("Loss/8", loss_vec[7], epoch)
+        # writer.add_scalar("Loss/9", loss_vec[8], epoch)
+        # writer.add_scalar("Loss/10", loss_vec[9], epoch)
+        # writer.add_scalar("Loss/11", loss_vec[10], epoch)
+        # writer.add_scalar("Loss/12", loss_vec[11], epoch)
+        # writer.add_scalar("Loss/Fx", force_err[0].item(), epoch)
+        # writer.add_scalar("Loss/Fy", force_err[1].item(), epoch)
+        # writer.add_scalar("Loss/Fz", force_err[2].item(), epoch)
+        # writer.add_scalar("Loss/Mx", force_err[3].item(), epoch)
+        # writer.add_scalar("Loss/My", force_err[4].item(), epoch)
+        # writer.add_scalar("Loss/Mz", force_err[5].item(), epoch)
         writer.add_scalar("Loss/train", loss, epoch)
 
         if config.training.cos_lr:
